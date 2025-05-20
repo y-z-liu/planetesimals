@@ -1,18 +1,19 @@
 import numpy as np
+from numba import njit, prange
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.animation import FuncAnimation
-from numba import njit, prange
+from matplotlib.ticker import FuncFormatter
 
 # ---------------- Tunable parameters ----------------
-N_INIT         = 1000          # initial number of bodies
+N_INIT         = 3000          # initial number of bodies
 T_END_YEARS    = 100           # total evolution time in years
 
-R_FACTOR       = 5             # collision radius scaling factor
+R_FACTOR       = 3             # collision radius scaling factor
 TOT_MASS_RATIO = 100           # total mass divided by Earth mass
 
-RHO_AU         = 0.05          # initial variation ratio of orbit
-RHO_MASS       = 0.5           # initial variation ratio of mass
+RHO_AU         = 0.03          # initial variation ratio of orbit
+RHO_MASS       = 0.3           # initial variation ratio of mass
 
 # adaptive time‐step bounds (seconds)
 DT_MIN         = 1.0e2
@@ -20,7 +21,7 @@ DT_MAX         = 1.0e5
 
 # visualization
 COLOR          = "Blues"
-INIT_SIZE      = 8
+PLOT_SCALE     = 1e-6
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -329,22 +330,33 @@ def animate(sim_gen):
     Visualize the simulation using matplotlib animation.
     """
     
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.plot(0, 0, marker=(12,1,0), markersize=15, color='red')
+    fig, ax = plt.subplots(figsize=(8, 8))
+    sun_radius = R_STAR
+    sun_circle = plt.Circle((0, 0), radius=sun_radius,
+                            color='red')
+    ax.add_patch(sun_circle)
     ax.set_xlim(-2*AU, 2*AU)
     ax.set_ylim(-2*AU, 2*AU)
+    ax.xaxis.set_major_locator(plt.MultipleLocator(AU))
+    ax.yaxis.set_major_locator(plt.MultipleLocator(AU))
+    formatter = FuncFormatter(lambda x, _: f"{x / AU:.0f} AU")
+    ax.xaxis.set_major_formatter(formatter)
+    ax.yaxis.set_major_formatter(formatter)
     ax.set_aspect('equal')
 
     mass_mean = TOT_MASS_RATIO * M_EARTH / N_INIT
     norm = LogNorm(vmin=mass_mean * 0.1,
                    vmax=mass_mean * 0.5 * N_INIT)
 
-    scat = ax.scatter([], [], s= INIT_SIZE,
+    scat = ax.scatter([], [],
                       c=[], cmap= COLOR, norm=norm)
 
     def update(frame):
         t, pos, masses = frame
-        s_current = (masses / mass_mean) * INIT_SIZE
+
+        radii = (masses / M_EARTH)**(1/3) * R_EARTH
+        s_current = (radii * PLOT_SCALE) ** 2
+
         scat.set_offsets(pos)
         scat.set_array(masses)
         scat.set_sizes(s_current)
