@@ -3,16 +3,19 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.animation import FuncAnimation
 from numba import njit, prange
-import itertools
 
 # ---------------- Tunable parameters ----------------
-R_FACTOR       = 5             # collision radius scaling factor
 N_INIT         = 1000          # initial number of bodies
-TOT_MASS_RATIO = 100           # total mass divided by Earth mass
 T_END_YEARS    = 100           # total evolution time in years
 
+R_FACTOR       = 5             # collision radius scaling factor
+TOT_MASS_RATIO = 100           # total mass divided by Earth mass
+
+RHO_AU         = 0.05          # initial variation ratio of orbit
+RHO_MASS       = 0.5           # initial variation ratio of mass
+
 # adaptive time‐step bounds (seconds)
-DT_MIN         = 1.0e3
+DT_MIN         = 1.0e2
 DT_MAX         = 1.0e5
 # ----------------------------------------------------
 
@@ -21,8 +24,8 @@ G        = 6.67430e-11       # gravitational constant [m^3 kg^-1 s^-2]
 M_STAR   = 1.989e30          # mass of central star (kg)
 M_EARTH  = 5.972e24          # Earth mass (kg)
 AU       = 1.496e11          # astronomical unit (m)
-DELTA_AU = 0.01 * AU         # initial orbital scatter (m)
 R_STAR   = 6.957e8           # radius of central star (m)
+R_EARTH  = 6.371e6           # radius of earth (m)
 # ----------------------------------------------------
 
 @njit(parallel=True)
@@ -221,7 +224,7 @@ def resolve_collisions_and_absorption(pos, vel, masses, radii,
         new_pos[g,1] /= m_tot
         new_vel[g,0] /= m_tot
         new_vel[g,1] /= m_tot
-        new_rad[g] = (m_tot / M_EARTH)**(1/3) * 6.371e6
+        new_rad[g] = (m_tot / M_EARTH)**(1/3) * R_EARTH
 
     # detect and remove star-absorbed bodies
     absorb = detect_sun_absorption(new_pos, new_vel, dt, R_star_scaled)
@@ -254,8 +257,8 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
     """
     Initialize positions, velocities, masses, and radii of bodies.
     """
-    mass_per_body = total_mass_ratio * M_EARTH / n
-    r0 = AU + np.random.uniform(-DELTA_AU, DELTA_AU, n)
+    mass_mean = total_mass_ratio * M_EARTH / n
+    r0 = AU + np.random.uniform(-RHO_AU * AU, RHO_AU * AU, n)
     theta = np.random.uniform(0, 2*np.pi, n)
     pos = np.vstack((r0 * np.cos(theta), r0 * np.sin(theta))).T
 
@@ -265,14 +268,15 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
     vel = np.vstack((-v_mag * np.sin(theta),
                      v_mag * np.cos(theta))).T
 
-    masses = np.full(n, mass_per_body)
-    radii  = np.full(n, (mass_per_body / M_EARTH)**(1/3) * 6.371e6)
+    masses = mass_mean + np.random.uniform(-RHO_MASS, RHO_MASS, n)
+    radii  = (masses / M_EARTH)**(1/3) * R_EARTH
+
     return pos, vel, masses, radii
 
 def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
              t_end_years=T_END_YEARS):
     """
-    Generator yielding (t, pos, masses, vmin, vmax) each step.
+    Generator yielding (t, pos, masses) each step.
     Uses previous dt for grid, collision detection, and integration,
     and computes next dt during collision detection.
     """
@@ -309,11 +313,8 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
             pos, vel, masses, radii, pairs, tcols, dt,
             R_FACTOR, sun_rad_scaled)
 
-        # prepare output for visualization
-        vmin = masses.min() * 0.1
-        vmax = masses.max() * 100.0
         t += dt
-        yield t, pos.copy(), masses.copy(), vmin, vmax
+        yield t, pos.copy(), masses.copy()
 
         # update dt for next iteration
         dt = dt_next
@@ -328,22 +329,20 @@ def animate(sim_gen):
     ax.set_ylim(-2*AU, 2*AU)
     ax.set_aspect('equal')
 
-    # prime the generator and set up the color norm once
-    first = next(sim_gen)
-    t0, pos0, masses0, vmin0, vmax0 = first
-    norm = LogNorm(vmin=vmin0, vmax=vmax0)
-    scat = ax.scatter(pos0[:,0], pos0[:,1], s=12,
-                      c=masses0, cmap='Greys', norm=norm)
+    mass_mean = TOT_MASS_RATIO * M_EARTH / N_INIT
+    norm = LogNorm(vmin=mass_mean * 0.1,
+                   vmax=mass_mean * 0.5 * N_INIT)
+    scat = ax.scatter([], [], s=12,
+                      c=[], cmap='Greys', norm=norm)
 
     def update(frame):
-        t, pos, masses, vmin, vmax = frame
+        t, pos, masses = frame
         scat.set_offsets(pos)
         scat.set_array(masses)
         ax.set_title(f"t = {t/86400/365:.2f} yr   N = {len(masses)}")
         return scat
 
-    frames = itertools.chain([first], sim_gen)
-    return FuncAnimation(fig, update, frames=frames,
+    return FuncAnimation(fig, update, frames=sim_gen,
                          interval=20, blit=False,
                          cache_frame_data=False)
 
