@@ -19,8 +19,8 @@ DT_MIN         = 1.0e2
 DT_MAX         = 1.0e5
 
 # visualization
-COlOR          ="Reds"
-INIT_SIZE      =8
+COLOR          = "Blues"
+INIT_SIZE      = 8
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -330,21 +330,21 @@ def animate(sim_gen):
     """
     
     fig, ax = plt.subplots(figsize=(6, 6))
-    ax.plot(0, 0, marker=(12,1,0), markersize=15, color='orange')
+    ax.plot(0, 0, marker=(12,1,0), markersize=15, color='red')
     ax.set_xlim(-2*AU, 2*AU)
     ax.set_ylim(-2*AU, 2*AU)
     ax.set_aspect('equal')
 
-    mass_mean = TOT_MASS_RATIO * M_EARTH / N_INIT# 这是初始状态平均质量
+    mass_mean = TOT_MASS_RATIO * M_EARTH / N_INIT
     norm = LogNorm(vmin=mass_mean * 0.1,
-                   vmax=mass_mean * 0.5 * N_INIT)# 这里是采用了log归一化来实现颜色映射
-    s_init = INIT_SIZE
-    scat = ax.scatter([], [], s = s_init,
-                      c=[], cmap= COlOR, norm=norm)
+                   vmax=mass_mean * 0.5 * N_INIT)
+
+    scat = ax.scatter([], [], s= INIT_SIZE,
+                      c=[], cmap= COLOR, norm=norm)
 
     def update(frame):
         t, pos, masses = frame
-        s_current = INIT_SIZE * masses / mass_mean
+        s_current = (masses / mass_mean) * INIT_SIZE
         scat.set_offsets(pos)
         scat.set_array(masses)
         scat.set_sizes(s_current)
