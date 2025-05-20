@@ -17,6 +17,10 @@ RHO_MASS       = 0.5           # initial variation ratio of mass
 # adaptive time‐step bounds (seconds)
 DT_MIN         = 1.0e2
 DT_MAX         = 1.0e5
+
+# visualization
+COlOR          ="Reds"
+INIT_SIZE      =8
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -319,26 +323,31 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
         # update dt for next iteration
         dt = dt_next
 
+
 def animate(sim_gen):
     """
     Visualize the simulation using matplotlib animation.
     """
+    
     fig, ax = plt.subplots(figsize=(6, 6))
     ax.plot(0, 0, marker=(12,1,0), markersize=15, color='orange')
     ax.set_xlim(-2*AU, 2*AU)
     ax.set_ylim(-2*AU, 2*AU)
     ax.set_aspect('equal')
 
-    mass_mean = TOT_MASS_RATIO * M_EARTH / N_INIT
+    mass_mean = TOT_MASS_RATIO * M_EARTH / N_INIT# 这是初始状态平均质量
     norm = LogNorm(vmin=mass_mean * 0.1,
-                   vmax=mass_mean * 0.5 * N_INIT)
-    scat = ax.scatter([], [], s=12,
-                      c=[], cmap='Greys', norm=norm)
+                   vmax=mass_mean * 0.5 * N_INIT)# 这里是采用了log归一化来实现颜色映射
+    s_init = INIT_SIZE
+    scat = ax.scatter([], [], s = s_init,
+                      c=[], cmap= COlOR, norm=norm)
 
     def update(frame):
         t, pos, masses = frame
+        s_current = INIT_SIZE * masses / mass_mean
         scat.set_offsets(pos)
         scat.set_array(masses)
+        scat.set_sizes(s_current)
         ax.set_title(f"t = {t/86400/365:.2f} yr   N = {len(masses)}")
         return scat
 
