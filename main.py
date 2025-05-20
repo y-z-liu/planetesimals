@@ -5,20 +5,14 @@ from matplotlib.animation import FuncAnimation
 from numba import njit, prange
 
 # ---------------- Tunable parameters ----------------
-R_FACTOR       = 10             # collision radius scaling factor
+R_FACTOR       = 5             # collision radius scaling factor
 N_INIT         = 1000          # initial number of bodies
 TOT_MASS_RATIO = 100           # total mass divided by Earth mass
 T_END_YEARS    = 100           # total evolution time in years
 
 # adaptive time‐step bounds (seconds)
-DT_MIN         = 1.0e4
+DT_MIN         = 1.0e3
 DT_MAX         = 1.0e5
-
-# solar wind at 1 AU dynamic pressure [Pa]
-SW_PRESSURE    = 2.0e-9
-
-# assumed body density [kg/m^3] (typical rocky body)
-BODY_DENSITY   = 3000.0
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -75,11 +69,6 @@ def compute_accelerations(pos, masses, radii):
         r = np.hypot(xi, yi)
         ax += -G * M_STAR * xi / (r**3)
         ay += -G * M_STAR * yi / (r**3)
-
-        # solar wind acceleration
-        coeff = 0.75 * (SW_PRESSURE / (BODY_DENSITY * radii[i])) * AU**2
-        ax += coeff * xi / (r**3)
-        ay += coeff * yi / (r**3)
 
         acc[i, 0] = ax
         acc[i, 1] = ay
@@ -288,7 +277,7 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
             t_coll_min = np.inf
 
         # choose dt from collision time
-        dt = np.clip(t_coll_min, DT_MIN, DT_MAX)
+        dt = np.clip(t_coll_min*2.0, DT_MIN, DT_MAX)
 
         # advance integrator
         pos, vel = leapfrog_step(pos, vel, masses, radii, dt)
@@ -299,7 +288,7 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
 
         # emit for animation
         vmin = masses.min() * 0.1
-        vmax = masses.max() * 10.0
+        vmax = masses.max() * 5.0
         t += dt
         yield t, pos.copy(), masses.copy(), vmin, vmax
 
