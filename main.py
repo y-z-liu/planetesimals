@@ -324,16 +324,22 @@ def animate(sim_gen):
     """
     Build a side-by-side animation:
       • Left:  scatter of bodies around the star (log-colored by mass)
-      • Right: histogram of mass distribution (log-y, log-x) with dynamic y-axis limits
+      • Right top: histogram of mass distribution (log scales)
+      • Right bottom: number of bodies versus time plot
     """
-    # pull first frame
+    # Retrieve first frame
     t0, pos0, m0 = next(sim_gen)
-    em0 = m0 / M_EARTH
+    em0 = m0 / M_EARTH  # convert to Earth masses
 
-    # figure & axes
-    fig, (ax_sc, ax_h) = plt.subplots(1, 2, figsize=(12,6))
+    # Set up figure with GridSpec
+    fig = plt.figure(figsize=(12, 8))
+    gs = fig.add_gridspec(2, 2,
+                          width_ratios=[2, 1],
+                          height_ratios=[3, 2],
+                          wspace=0.3, hspace=0.3)
 
-    # --- left: scatter + star ---
+    # Left: scatter plot
+    ax_sc = fig.add_subplot(gs[:, 0])
     ax_sc.add_patch(plt.Circle((0,0), R_STAR, color='red'))
     ax_sc.set_xlim(-2*AU, 2*AU)
     ax_sc.set_ylim(-2*AU, 2*AU)
@@ -343,62 +349,81 @@ def animate(sim_gen):
     ax_sc.xaxis.set_major_formatter(FuncFormatter(lambda x,_: f"{x/AU:.0f} AU"))
     ax_sc.yaxis.set_major_formatter(FuncFormatter(lambda y,_: f"{y/AU:.0f} AU"))
 
+    # Prepare scatter
     mean_m = TOT_MASS_RATIO * M_EARTH / N_INIT
-    norm  = LogNorm(vmin=mean_m*(1-RHO_MASS), vmax=mean_m*(1+RHO_MASS)*N_INIT)
-    r0 = (em0)**(1/3)*R_EARTH
+    norm = LogNorm(vmin=mean_m*(1-RHO_MASS), vmax=mean_m*(1+RHO_MASS)*N_INIT)
+    r0 = (em0)**(1/3) * R_EARTH
     s0 = (r0 * PLOT_SCALE)**2
-
     scat = ax_sc.scatter(pos0[:,0], pos0[:,1],
                          c=m0, cmap=COLOR, norm=norm, s=s0)
 
-    # --- right: histogram ---
-    min_em = (1-RHO_MASS)*TOT_MASS_RATIO / N_INIT
-    max_em = (1+RHO_MASS)*TOT_MASS_RATIO
-    bins   = np.logspace(np.log10(min_em), np.log10(max_em), 30)
+    # Right top: histogram
+    ax_h = fig.add_subplot(gs[0, 1])
+    min_em = (1-RHO_MASS) * TOT_MASS_RATIO / N_INIT
+    max_em = (1+RHO_MASS) * TOT_MASS_RATIO
+    bins = np.logspace(np.log10(min_em), np.log10(max_em), 30)
 
     cnt0, _ = np.histogram(em0, bins=bins)
-    cnt0 = np.where(cnt0>0, cnt0, 1)  # ensure non-zero
-
+    cnt0 = np.where(cnt0>0, cnt0, 1)
     bars = ax_h.bar(bins[:-1], cnt0,
-                    width=np.diff(bins), align='edge',
-                    edgecolor='black')
-
+                    width=np.diff(bins), align='edge', edgecolor='black')
     ax_h.set_xscale('log')
     ax_h.set_yscale('log')
     ax_h.set_xlabel("Mass (Earth masses)")
     ax_h.set_ylabel("Count")
     ax_h.set_title("Mass Distribution")
-    
-    # Set initial y-axis limits based on first frame
-    ax_h.set_ylim(1, cnt0.max() * 1.2)
+    ax_h.set_ylim(1e-1, cnt0.max() * 1.2)
+
+    # Right bottom: body count vs time
+    ax_n = fig.add_subplot(gs[1, 1])
+    times = [t0 / (86400*365)]
+    counts = [len(m0)]
+    # Thinner line for body count and dynamic x-axis scaling
+    line, = ax_n.plot(times, counts, linewidth=2)
+    ax_n.set_xlabel('Time (years)')
+    ax_n.set_ylabel('Number of bodies')
+    ax_n.set_title('Body Count over Time')
+    # Remove fixed x-limits; will update dynamically
 
     def update(frame):
+        """
+        Update all plots each frame.
+        """
         t, pos, m = frame
         em = m / M_EARTH
 
-        # update scatter
-        r = (em)**(1/3)*R_EARTH
+        # Update scatter
+        r = (em)**(1/3) * R_EARTH
         s = (r * PLOT_SCALE)**2
         scat.set_offsets(pos)
         scat.set_array(m)
         scat.set_sizes(s)
         ax_sc.set_title(f"t = {t/86400/365:.2f} yr   N = {len(m)}")
 
-        # update histogram
+        # Update histogram
         cnt, _ = np.histogram(em, bins=bins)
         cnt = np.where(cnt>0, cnt, 1e-8)
         for rect, h in zip(bars, cnt):
             rect.set_height(h)
-
-        # dynamically adjust y-axis limit
         ax_h.set_ylim(1e-1, cnt.max() * 1.2)
 
-        return (scat, *bars)
+        # Update body count vs time
+        t_years = t / (86400*365)
+        times.append(t_years)
+        counts.append(len(m))
+        line.set_data(times, counts)
+        # Dynamically adjust x-axis limit to current time
+        ax_n.set_xlim(0, times[-1] * 1.05)
+        # Optionally adjust y-axis if needed
+        ax_n.set_ylim(0, max(counts) * 1.05)
+
+        return (scat, *bars, line)
 
     return FuncAnimation(fig, update,
                          frames=sim_gen,
                          interval=20, blit=False,
                          cache_frame_data=False)
+
 
 if __name__ == "__main__":
     sim = simulate()
