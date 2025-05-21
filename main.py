@@ -5,6 +5,7 @@ from matplotlib.colors import LogNorm
 from matplotlib.animation import FuncAnimation
 from matplotlib.ticker import FuncFormatter
 
+# --- 2D ---
 # ---------------- Tunable parameters ----------------
 N_INIT         = 1000          # initial number of bodies
 T_END_YEARS    = 100           # total evolution time in years
@@ -283,7 +284,7 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
     Yields (time, positions, masses) step-by-step until t_end_years
     or only one body remains.
     """
-    pos, vel, masses, radii = init_bodies
+    pos, vel, masses, radii = initialize_bodies(n, total_mass_ratio)
     t = 0.0
     t_end = t_end_years * 365 * 86400.0
     dt = DT_MIN
