@@ -283,7 +283,7 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
     Yields (time, positions, masses) step-by-step until t_end_years
     or only one body remains.
     """
-    pos, vel, masses, radii = initialize_bodies(n, total_mass_ratio)
+    pos, vel, masses, radii = init_bodies
     t = 0.0
     t_end = t_end_years * 365 * 86400.0
     dt = DT_MIN
