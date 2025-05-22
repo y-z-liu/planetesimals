@@ -4,21 +4,23 @@ from mpl_toolkits.mplot3d import Axes3D  # 新增3D绘图模块
 from matplotlib.colors import LogNorm
 from matplotlib.animation import FuncAnimation
 from numba import njit, prange
+from matplotlib.ticker import FuncFormatter
 # #this is a three dimensional version
 # # ---------------- Tunable parameters ----------------
 N_INIT         = 1000          # initial number of bodies
 T_END_YEARS    = 100           # total evolution time in years
 
-R_FACTOR       = 5             # collision radius scaling factor
+R_FACTOR       = 10             # collision radius scaling factor
 TOT_MASS_RATIO = 10           # total mass divided by Earth mass
 
-RHO_AU         = 0.1          # initial variation ratio of orbit
+RHO_AU         = 0.01          # initial variation ratio of orbit
 RHO_MASS       = 0.5           # initial variation ratio of mass
 X_RATIO        = 0.1          # X-axis shrinking ratio
 Y_RATIO        = 0.1           # Y-axis shrinking ratio
-Z_THICK        = 0.01
+Z_THICK        = 0.001
 COMPRESSION_FACTOR= 0.5        # compression due to collision
 DENSITY        = 1           # initial density(divided by earth's density)
+Z_DISTURB      = 0.001         # disturbance along axis-z(initialization)
 
 # adaptive time‐step bounds (seconds)
 DT_MIN         = 1.0e2
@@ -28,7 +30,6 @@ COlOR          = "Blues"
 INIT_SIZE      = 1
 SCOPE_RATIO    = 2
 Z_SCOPE_RATIO  = 0.2
-VIEW           = False
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -287,7 +288,7 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
     # initial velocities(spin in xOy& desturbance along z)
     v_circ = np.sqrt(G * M_STAR / r)# (设为圆周运动的稳定速度)
     v_theta = v_circ * (1 + np.random.uniform(-speed_variation, speed_variation, n))
-    vz = 0.001 * v_circ * np.random.uniform(-1, 1, n)  # 垂直方向速度
+    vz = Z_DISTURB * v_circ * np.random.uniform(-1, 1, n)  # 垂直方向速度
     
     vel = np.vstack([
         -v_theta * np.sin(theta),
@@ -359,46 +360,101 @@ def animate_3d(sim_gen):
     """
     Visualize the simulation using matplotlib animation.
     """
-    fig = plt.figure(figsize=(8,8))
-    ax = fig.add_subplot(111, projection='3d')  # 3D projection
-    
+    t0, pos0, m0 = next(sim_gen)
+    fig = plt.figure(figsize=(12, 8))
+    gs = fig.add_gridspec(2, 2,
+                          width_ratios=[2, 1],
+                          height_ratios=[2, 2],
+                          wspace=0.3, hspace=0.3)
+
+    # 3D plot on the left (occupy both rows)
+    ax = fig.add_subplot(gs[:, 0], projection='3d')
+
     # central star
     ax.scatter([0], [0], [0], s=100, c='red', marker='.')
-    
+
     # 坐标轴设置
+    
+
     ax.set_xlim3d(-SCOPE_RATIO*AU, SCOPE_RATIO*AU)
     ax.set_ylim3d(-SCOPE_RATIO*AU, SCOPE_RATIO*AU)
-    ax.set_zlim3d(-Z_SCOPE_RATIO * AU, Z_SCOPE_RATIO * AU)  # z轴范围较小体现盘状结构
-    ax.set_box_aspect([2,2,0.5])  # 空间比例
-    
+    ax.set_zlim3d(-Z_SCOPE_RATIO * AU, Z_SCOPE_RATIO * AU)
+    ax.set_box_aspect([2,2,0.5])
+    ax.xaxis.set_major_locator(plt.MultipleLocator(AU))
+    ax.yaxis.set_major_locator(plt.MultipleLocator(AU))
+    ax.zaxis.set_major_locator(plt.MultipleLocator(AU))
+
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda x,_: f"{x/AU:.0f} AU"))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y,_: f"{y/AU:.0f} AU"))
+    ax.zaxis.set_major_formatter(FuncFormatter(lambda z,_: f"{z/AU:.2f} AU"))
 
     mass_mean = TOT_MASS_RATIO * M_EARTH / N_INIT
     norm = LogNorm(vmin=mass_mean*0.1, vmax=mass_mean*0.5*N_INIT)
-    s_init = INIT_SIZE
-    
-    scat = ax.scatter([], [], [], s=s_init, c=[], 
+
+    scat = ax.scatter([], [], [], s=INIT_SIZE, c=[],
                      cmap=COlOR, norm=norm, depthshade=True)
-    
+
+    # Right top: histogram
+    ax_h = fig.add_subplot(gs[0, 1])
+    min_em = (1-RHO_MASS) * TOT_MASS_RATIO / N_INIT
+    max_em = (1+RHO_MASS) * TOT_MASS_RATIO
+    bins = np.logspace(np.log10(min_em), np.log10(max_em), 30)
+
+    cnt0, _ = np.histogram(m0/mass_mean , bins=bins)
+    cnt0 = np.where(cnt0>0, cnt0, 1)
+    bars = ax_h.bar(bins[:-1], cnt0,
+                    width=np.diff(bins), align='edge', edgecolor='black')
+    ax_h.set_xscale('log')
+    ax_h.set_xlabel("Mass (Earth masses)")
+    ax_h.set_ylabel("Count")
+    ax_h.set_title("Mass Distribution")
+    ax_h.set_ylim(1e-1, cnt0.max() * 1.2)
+
+    # Right bottom: body count vs time
+    ax_n = fig.add_subplot(gs[1, 1])
+    times = [t0 / (86400*365)]
+    counts = [len(m0)]
+    line, = ax_n.plot(times, counts, linewidth = 1)
+    ax_n.set_xlabel("Time (years)")
+    ax_n.set_ylabel("Body Count")
+    ax_n.set_title("Body Count vs Time")
+    ax_n.set_xlim(0, t0 / (86400*365) + 1)
+    ax_n.set_ylim(0, len(m0) * 1.05)
+
     def update(frame):
         t, pos, masses = frame
-        
-        
+
         s_current = np.power(masses / mass_mean, 2.0/3.0) * INIT_SIZE
-        
+
         # update scatter attributes
-        scat._offsets3d = (pos[:,0], pos[:,1], pos[:,2])  
+        scat._offsets3d = (pos[:,0], pos[:,1], pos[:,2])
         scat.set_array(masses)
         scat.set_sizes(s_current)
-        
-        # spining view
-        if VIEW:
-            ax.view_init(elev=25, azim=0.3*t/86400)  
-        
+
+        # Update histogram
+        cnt, _ = np.histogram(masses/M_EARTH, bins=bins)
+        cnt = np.where(cnt>0, cnt, 1e-8)
+        for rect, h in zip(bars, cnt):
+            rect.set_height(h)
+        ax_h.set_ylim(1e-1, cnt.max() * 1.1)
+
+        # Update body count vs time
+        t_years = t / (86400*365)
+        times.append(t_years)
+        counts.append(len(masses))
+        line.set_data(times, counts)
+        # Dynamically adjust x-axis limit to current time
+        ax_n.set_xlim(0, times[-1] * 1.05)
+        # Optionally adjust y-axis if needed
+        ax_n.set_ylim(0, max(counts) * 1.05)
+
+
+
         ax.set_title(f"3D View | t = {t/86400/365:.1f} yr | N = {len(masses)}")
         return scat
-    
+
     return FuncAnimation(fig, update, frames=sim_gen,
-                        interval=20, blit=False, 
+                        interval=20, blit=False,
                         cache_frame_data=False)
 
 
