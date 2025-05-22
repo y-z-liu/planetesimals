@@ -7,9 +7,10 @@ from matplotlib.ticker import FuncFormatter
 
 # ---------------- Tunable parameters ----------------
 N_INIT         = 1000          # initial number of micro-planets
-T_END_YEARS    = 100           # total integration time [years]
+T_END_YEARS    = 10000         # total integration time [years]
+DRAW_SKIP      = [1e3,1e6,1e3] # {normal interval, except every _ , slow down _}
 
-R_FACTOR       = 5             # collision-radius scaling factor
+R_FACTOR       = 2             # collision-radius scaling factor
 TOT_MASS_RATIO = 100           # total planetary mass, in Earth masses
 
 RHO_AU         = 0.02          # orbital scatter fraction
@@ -295,12 +296,22 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO, t_end_years=T_END_YEARS)
         dt = dt_next
 
 
-def animate(sim_gen):
+def animate(sim_gen, draw_interval=DRAW_SKIP):
     """
     Create a 2×2 panel animation: scatter, histogram, count & energy.
     """
+    # wrap sim_gen to decimate frames
+    def decimated_gen():
+        for i, frame in enumerate(sim_gen):
+            if i % draw_interval[1] < draw_interval[2]:
+                yield frame
+            elif i % draw_interval[0] == 0:
+                yield frame
+
+    gen = decimated_gen()
+
     # First frame
-    t0, pos0, m0, vel0, E0 = next(sim_gen)
+    t0, pos0, m0, vel0, E0 = next(gen)
     star_x0, star_y0 = pos0[0]
     pos_p0 = pos0[1:]
     m_p0   = m0[1:]
@@ -313,8 +324,8 @@ def animate(sim_gen):
     ax_sc = fig.add_subplot(gs[:,0])
     star_patch = plt.Circle((star_x0, star_y0), R_STAR * R_FACTOR, color='red')
     ax_sc.add_patch(star_patch)
-    ax_sc.set_xlim(-2*AU, 2*AU)
-    ax_sc.set_ylim(-2*AU, 2*AU)
+    ax_sc.set_xlim(-2.5*AU, 2.5*AU)
+    ax_sc.set_ylim(-2.5*AU, 2.5*AU)
     ax_sc.set_aspect('equal')
     ax_sc.xaxis.set_major_locator(plt.MultipleLocator(AU))
     ax_sc.yaxis.set_major_locator(plt.MultipleLocator(AU))
@@ -399,9 +410,10 @@ def animate(sim_gen):
         return (star_patch, scat, *bars, line_count, line_energy)
 
     return FuncAnimation(fig, update,
-                         frames=sim_gen,
-                         interval=20, blit=False,
-                         cache_frame_data=False)
+                         frames=gen,
+                         interval=50, blit=False,
+                         cache_frame_data=False,
+                         repeat=False)
 
 
 if __name__ == '__main__':
