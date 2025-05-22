@@ -5,7 +5,6 @@ from matplotlib.colors import LogNorm
 from matplotlib.animation import FuncAnimation
 from matplotlib.ticker import FuncFormatter
 
-# --- 2D ---
 # ---------------- Tunable parameters ----------------
 N_INIT         = 1000          # initial number of bodies
 T_END_YEARS    = 100           # total evolution time in years
@@ -56,7 +55,7 @@ def compute_accelerations(pos, masses):
             ayi += -G * masses[j] * dy / d3
 
         # gravity from the star at the origin
-        r = np.hypot(xi, yi)
+        r = (xi*xi + yi*yi)**0.5
         axi += -G * M_STAR * xi / (r**3)
         ayi += -G * M_STAR * yi / (r**3)
 
@@ -277,14 +276,54 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
 
     return pos, vel, masses, radii
 
+
+@njit
+def compute_total_energy(pos, vel, masses):
+    """
+    Compute total mechanical energy:
+      • Kinetic energy
+      • Potential energy from star
+      • Pairwise gravitational potential between bodies
+    """
+    n = pos.shape[0]
+    # Kinetic energy
+    KE = 0.0
+    for i in range(n):
+        KE += 0.5 * masses[i] * (vel[i,0]**2 + vel[i,1]**2)
+
+    # Potential: star + mutual
+    PE = 0.0
+    # Star potential
+    for i in range(n):
+        xi, yi = pos[i,0], pos[i,1]
+        r = (xi*xi + yi*yi)**0.5
+        PE += -G * M_STAR * masses[i] / r
+
+    # Pairwise mutual potential
+    for i in range(n):
+        xi, yi = pos[i,0], pos[i,1]
+        mi = masses[i]
+        for j in range(i+1, n):
+            dx = xi - pos[j,0]
+            dy = yi - pos[j,1]
+            r = (dx*dx + dy*dy)**0.5
+            PE += -G * mi * masses[j] / r
+
+    return KE + PE
+
+
 def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
              t_end_years=T_END_YEARS):
+    """
+    Yields at each step: (t, pos, masses, vel, total_energy)
+    """
     pos, vel, masses, radii = initialize_bodies(n, total_mass_ratio)
     t = 0.0
     t_end = t_end_years * 365 * 86400.0
     dt = DT_MIN
 
     while t < t_end and len(masses) > 1:
+        # adaptive collision‐time estimate
         max_v = np.max(np.linalg.norm(vel, axis=1))
         cell = 2 * np.max(radii) * R_FACTOR + max_v * dt
         pairs = neighbour_pairs(pos, cell)
@@ -292,50 +331,52 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
             tcols = min_time_to_collision(pos, vel, radii, pairs, R_FACTOR)
         else:
             tcols = np.empty(0, dtype=np.float64)
+
         future = tcols[tcols > dt]
-        dt_next = np.clip((future.min()-dt)*2, DT_MIN, DT_MAX) if future.size else DT_MAX
+        dt_next = (np.clip((future.min()-dt)*2, DT_MIN, DT_MAX)
+                   if future.size else DT_MAX)
+
+        # advance bodies
         pos, vel = leapfrog_step(pos, vel, masses, dt)
+
+        # merge / absorb
         sun_scaled = R_STAR * R_FACTOR
         pos, vel, masses, radii = resolve_collisions_and_absorption(
             pos, vel, masses, radii, pairs, tcols, dt,
             R_FACTOR, sun_scaled
         )
+
         t += dt
-        yield t, pos.copy(), masses.copy(), vel.copy()
+
+        # compute mechanical energy once, here
+        E = compute_total_energy(pos, vel, masses)
+
+        # send everything—including energy—to the animator
+        yield t, pos.copy(), masses.copy(), vel.copy(), E
+
         dt = dt_next
 
-# Compute total mechanical energy of the system
-def compute_total_energy(pos, vel, masses):
-    # Kinetic energy
-    KE = 0.5 * np.sum(masses * np.sum(vel**2, axis=1))
-    
-    # Central star potential energy
-    r_star = np.linalg.norm(pos, axis=1)
-    PE_star = -G * M_STAR * np.sum(masses / r_star)
-    return KE + PE_star
 
-# Animate the simulation with additional energy plot
 def animate(sim_gen):
-    '''
+    """
     Build a side-by-side animation:
       • Left: scatter of bodies (log-colored by mass)
-      • Right top: histogram of mass distribution
+      • Top right: histogram of mass distribution
       • Middle right: number of bodies vs time
       • Bottom right: total mechanical energy vs time
-    '''
+    """
     # First frame
-    t0, pos0, m0, vel0 = next(sim_gen)
+    t0, pos0, m0, vel0, E0 = next(sim_gen)
     em0 = m0 / M_EARTH
-    E0 = compute_total_energy(pos0, vel0, m0)
 
-    # Setup figure and GridSpec for 3x2 layout
+    # Figure setup
     fig = plt.figure(figsize=(12, 8))
     gs = fig.add_gridspec(3, 2,
                           width_ratios=[2, 1],
                           height_ratios=[2, 2, 2],
                           wspace=0.3, hspace=0.5)
 
-    # Left: scatter plot around star
+    # Scatter around star
     ax_sc = fig.add_subplot(gs[:, 0])
     ax_sc.add_patch(plt.Circle((0, 0), R_STAR, color='red'))
     ax_sc.set_xlim(-2*AU, 2*AU)
@@ -345,28 +386,31 @@ def animate(sim_gen):
     ax_sc.yaxis.set_major_locator(plt.MultipleLocator(AU))
     ax_sc.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x/AU:.0f} AU'))
     ax_sc.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y/AU:.0f} AU'))
+
     mean_m = TOT_MASS_RATIO * M_EARTH / N_INIT
     norm = LogNorm(vmin=mean_m*(1-RHO_MASS), vmax=mean_m*(1+RHO_MASS)*N_INIT)
     r0 = (em0)**(1/3) * R_EARTH
     s0 = (r0 * PLOT_SCALE)**2
-    scat = ax_sc.scatter(pos0[:, 0], pos0[:, 1], c=m0, cmap=COLOR, norm=norm, s=s0)
+    scat = ax_sc.scatter(pos0[:,0], pos0[:,1],
+                         c=m0, cmap=COLOR, norm=norm, s=s0)
 
-    # Top right: mass histogram
+    # Mass histogram
     ax_h = fig.add_subplot(gs[0, 1])
     min_em = (1-RHO_MASS) * TOT_MASS_RATIO / N_INIT
     max_em = (1+RHO_MASS) * TOT_MASS_RATIO
     bins = np.logspace(np.log10(min_em), np.log10(max_em), 30)
     cnt0, _ = np.histogram(em0, bins=bins)
     cnt0 = np.where(cnt0>0, cnt0, 1)
-    bars = ax_h.bar(bins[:-1], cnt0, width=np.diff(bins), align='edge', edgecolor='black')
+    bars = ax_h.bar(bins[:-1], cnt0,
+                    width=np.diff(bins), align='edge', edgecolor='black')
     ax_h.set_xscale('log')
     ax_h.set_yscale('log')
     ax_h.set_xlabel('Mass (Earth masses)')
     ax_h.set_ylabel('Count')
     ax_h.set_title('Mass Distribution')
-    ax_h.set_ylim(1e-1, cnt0.max() * 1.2)
+    ax_h.set_ylim(1e-1, cnt0.max()*1.2)
 
-    # Middle right: body count vs time
+    # Body count vs time
     ax_n = fig.add_subplot(gs[1, 1])
     times = [t0 / (86400*365)]
     counts = [len(m0)]
@@ -375,7 +419,7 @@ def animate(sim_gen):
     ax_n.set_ylabel('Number of bodies')
     ax_n.set_title('Body Count over Time')
 
-    # Bottom right: energy vs time
+    # Energy vs time
     ax_e = fig.add_subplot(gs[2, 1])
     energies = [E0]
     line_energy, = ax_e.plot(times, energies, linewidth=1)
@@ -384,7 +428,7 @@ def animate(sim_gen):
     ax_e.set_title('Energy vs Time')
 
     def update(frame):
-        t, pos, m, vel = frame
+        t, pos, m, vel, E = frame
         em = m / M_EARTH
 
         # Update scatter
@@ -393,34 +437,37 @@ def animate(sim_gen):
         scat.set_offsets(pos)
         scat.set_array(m)
         scat.set_sizes(s)
-        ax_sc.set_title(f't = {t/86400/365:.2f} yr   N = {len(m)}')
+        ax_sc.set_title(f't = {t/(86400*365):.2f} yr   N = {len(m)}')
 
         # Update histogram
         cnt, _ = np.histogram(em, bins=bins)
         cnt = np.where(cnt>0, cnt, 1e-8)
         for rect, h in zip(bars, cnt):
             rect.set_height(h)
-        ax_h.set_ylim(1e-1, cnt.max() * 1.2)
+        ax_h.set_ylim(1e-1, cnt.max()*1.2)
 
-        # Update count plot
-        t_years = t / (86400*365)
-        times.append(t_years)
+        # Update body count
+        t_yrs = t / (86400*365)
+        times.append(t_yrs)
         counts.append(len(m))
         line_count.set_data(times, counts)
-        ax_n.set_xlim(0, times[-1] * 1.05)
-        ax_n.set_ylim(0, max(counts) * 1.05)
+        ax_n.set_xlim(0, times[-1]*1.05)
+        ax_n.set_ylim(0, max(counts)*1.05)
 
-        # Update energy plot
-        E = compute_total_energy(pos, vel, m)
+        # Update energy curve
         energies.append(E)
         line_energy.set_data(times, energies)
-        ax_e.set_xlim(0, times[-1] * 1.05)
-        min_E, max_E = min(energies), max(energies)
-        ax_e.set_ylim(min_E , max_E )
+        ax_e.set_xlim(0, times[-1]*1.05)
+        ax_e.set_ylim(min(energies), max(energies))
 
+        # return all artists
         return (scat, *bars, line_count, line_energy)
 
-    return FuncAnimation(fig, update, frames=sim_gen, interval=20, blit=False, cache_frame_data=False)
+    return FuncAnimation(fig, update,
+                         frames=sim_gen,
+                         interval=20, blit=False,
+                         cache_frame_data=False)
+
 
 if __name__ == '__main__':
     sim = simulate()
