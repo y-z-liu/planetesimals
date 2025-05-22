@@ -6,21 +6,22 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.ticker import FuncFormatter
 
 # ---------------- Tunable parameters ----------------
-N_INIT         = 1000          # initial number of micro-planets
-T_END_YEARS    = 10000         # total integration time [years]
-DRAW_SKIP      = [1e3,1e6,1e3] # {normal interval, except every _ , slow down _}
+N_INIT         = 1000              # initial number of micro-planets
+T_END_YEARS    = 10000             # total integration time [years]
+DRAW_SKIP      = [1e3,1e6,1e4]     # {normal interval, except every _ , slow down _}
 
-R_FACTOR       = 2             # collision-radius scaling factor
-TOT_MASS_RATIO = 100           # total planetary mass, in Earth masses
+R_FACTOR       = 2                 # collision-radius scaling factor
+TOT_MASS_RATIO = 10                # total planetary mass, in Earth masses
 
-RHO_AU         = 0.02          # orbital scatter fraction
-RHO_MASS       = 0.2           # mass scatter fraction
+RHO_AU         = 0.02              # orbital scatter fraction
+RHO_MASS       = 0.2               # mass scatter fraction
 
-DT_MIN         = 1.0e2         # minimum timestep [s]
-DT_MAX         = 1.0e5         # maximum timestep [s]
+DT_MIN         = 1.0e2             # minimum timestep [s]
+DT_MAX         = 1.0e5             # maximum timestep [s]
 
-COLOR          = "Blues"       # colormap for planet scatter
-PLOT_SCALE     = 1e-6          # marker size scale factor
+COLOR          = "Greens"          # colormap for planet scatter
+PLOT_SCALE     = 2e-6              # planet scatter size
+PLT_STYLE      = "Solarize_Light2" # style for matplotlib
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -316,14 +317,14 @@ def animate(sim_gen, draw_interval=DRAW_SKIP):
     pos_p0 = pos0[1:]
     m_p0   = m0[1:]
 
+    plt.style.use(PLT_STYLE)
     fig = plt.figure(figsize=(12, 8))
-    gs = fig.add_gridspec(3, 2, width_ratios=[2,1], height_ratios=[2,2,2],
-                          wspace=0.3, hspace=0.5)
+    gs = fig.add_gridspec(3, 2, width_ratios=[2,1], height_ratios=[3,3,3],
+                          wspace=0.3, hspace=0.7)
 
     # Scatter plot around star
     ax_sc = fig.add_subplot(gs[:,0])
-    star_patch = plt.Circle((star_x0, star_y0), R_STAR * R_FACTOR, color='red')
-    ax_sc.add_patch(star_patch)
+    star_marker = ax_sc.scatter([star_x0], [star_y0], s=300, marker=(12,1,0), c='orange')
     ax_sc.set_xlim(-2.5*AU, 2.5*AU)
     ax_sc.set_ylim(-2.5*AU, 2.5*AU)
     ax_sc.set_aspect('equal')
@@ -333,8 +334,8 @@ def animate(sim_gen, draw_interval=DRAW_SKIP):
     ax_sc.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y/AU:.0f} AU'))
 
     mean_mass = TOT_MASS_RATIO * M_EARTH / N_INIT
-    norm = LogNorm(vmin=mean_mass*(1-RHO_MASS)*0.5,
-                   vmax=mean_mass*(1+RHO_MASS)*0.5*N_INIT)
+    norm = LogNorm(vmin=mean_mass*0.1,
+                   vmax=mean_mass*N_INIT)
     r0 = (m_p0 / M_EARTH)**(1/3) * R_EARTH
     s0 = (r0 * PLOT_SCALE)**2
     scat = ax_sc.scatter(pos_p0[:,0], pos_p0[:,1],
@@ -351,7 +352,7 @@ def animate(sim_gen, draw_interval=DRAW_SKIP):
                     width=np.diff(bins), align='edge', edgecolor='black')
     ax_h.set_xscale('log')
     ax_h.set_yscale('log')
-    ax_h.set_xlabel('Mass (Earth masses)')
+    ax_h.set_xlabel('M (Earth masses)')
     ax_h.set_ylabel('Count')
     ax_h.set_title('Mass Distribution')
     ax_h.set_ylim(1e-1, cnt0.max()*1.2)
@@ -360,22 +361,22 @@ def animate(sim_gen, draw_interval=DRAW_SKIP):
     ax_n = fig.add_subplot(gs[1,1])
     times = [t0 / (86400*365)]
     counts = [m_p0.size]
-    line_count, = ax_n.plot(times, counts, linewidth=1)
-    ax_n.set_xlabel('Time (years)')
-    ax_n.set_ylabel('Number of planets')
-    ax_n.set_title('Planet Count over Time')
+    line_count, = ax_n.plot(times, counts, 'b-')
+    ax_n.set_xlabel('t (years)')
+    ax_n.set_ylabel('N (bodies)')
+    ax_n.set_title('Number of Planetesimals')
 
     # Energy vs time
     ax_e = fig.add_subplot(gs[2,1])
     energies = [E0]
-    line_energy, = ax_e.plot(times, energies, linewidth=1)
-    ax_e.set_xlabel('Time (years)')
-    ax_e.set_ylabel('Total Mechanical Energy (J)')
-    ax_e.set_title('Energy vs Time')
+    line_energy, = ax_e.plot(times, energies, 'm-')
+    ax_e.set_xlabel('t (years)')
+    ax_e.set_ylabel('Energy (J)')
+    ax_e.set_title('Total Mechanical Energy')
 
     def update(frame):
         t, pos, m, vel, E = frame
-        star_patch.center = tuple(pos[0])
+        star_marker.set_offsets(pos[0])
         pos_p = pos[1:]
         m_p   = m[1:]
 
@@ -385,7 +386,7 @@ def animate(sim_gen, draw_interval=DRAW_SKIP):
         scat.set_offsets(pos_p)
         scat.set_array(m_p)
         scat.set_sizes(s)
-        ax_sc.set_title(f't = {t/(86400*365):.2f} yr   N = {m_p.size}')
+        ax_sc.set_title(f't = {t/(86400*365):.2f} years   N = {m_p.size}')
 
         # update histogram
         cnt, _ = np.histogram(m_p / M_EARTH, bins=bins)
@@ -407,7 +408,7 @@ def animate(sim_gen, draw_interval=DRAW_SKIP):
         ax_e.set_xlim(0, times[-1]*1.05)
         ax_e.set_ylim(min(energies), max(energies))
 
-        return (star_patch, scat, *bars, line_count, line_energy)
+        return (star_marker, scat, *bars, line_count, line_energy)
 
     return FuncAnimation(fig, update,
                          frames=gen,
