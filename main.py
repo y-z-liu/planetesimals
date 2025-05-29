@@ -8,9 +8,9 @@ from matplotlib.ticker import FuncFormatter
 # ---------------- Tunable parameters ----------------
 N_INIT         = 1000              # initial number of micro-planets
 T_END_YEARS    = 10000             # total integration time [years]
-DRAW_SKIP      = [1e3,1e6,1e4]     # {normal interval, except every _ , slow down _}
+DRAW_SKIP      = [1e3, 3e5, 3e2]   # {normal interval, except every _, slow down _}
 
-R_FACTOR       = 2                 # collision-radius scaling factor
+R_FACTOR       = 5                 # collision-radius scaling factor
 TOT_MASS_RATIO = 10                # total planetary mass, in Earth masses
 
 RHO_AU         = 0.02              # orbital scatter fraction
@@ -19,9 +19,15 @@ RHO_MASS       = 0.2               # mass scatter fraction
 DT_MIN         = 1.0e2             # minimum timestep [s]
 DT_MAX         = 1.0e5             # maximum timestep [s]
 
-COLOR          = "Greens"          # colormap for planet scatter
+COLOR          = "Blues"           # colormap for planet scatter
 PLOT_SCALE     = 2e-6              # planet scatter size
 PLT_STYLE      = "Solarize_Light2" # style for matplotlib
+
+SEED           = None              # random seed for reproducibility (None to disable)
+SAVE_YEARS     = [1, 5, 10, 50, 100, 500, 1000, 5000, 10000]
+                                   # years at which to capture snapshots for GIF;
+                                   # set to [] to disable GIF output
+GIF_FILENAME   = 'selected_frames.gif'
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -36,16 +42,11 @@ R_EARTH  = 6.371e6           # Earth radius [m]
 
 @njit(parallel=True)
 def compute_accelerations(pos, masses):
-    """
-    Compute accelerations for each body due to all others.
-    """
     n = pos.shape[0]
     acc = np.zeros((n, 2), dtype=np.float64)
-
     for i in prange(n):
         xi, yi = pos[i,0], pos[i,1]
-        axi = 0.0
-        ayi = 0.0
+        axi, ayi = 0.0, 0.0
         for j in range(n):
             if i == j:
                 continue
@@ -54,17 +55,12 @@ def compute_accelerations(pos, masses):
             inv_r3 = 1.0 / (dx*dx + dy*dy)**1.5
             axi += -G * masses[j] * dx * inv_r3
             ayi += -G * masses[j] * dy * inv_r3
-        acc[i,0] = axi
-        acc[i,1] = ayi
-
+        acc[i,0], acc[i,1] = axi, ayi
     return acc
 
 
 @njit
 def leapfrog_step(pos, vel, masses, dt):
-    """
-    Advance positions and velocities by one leapfrog step.
-    """
     a0 = compute_accelerations(pos, masses)
     vel_half = vel + 0.5 * dt * a0
     pos_new = pos + dt * vel_half
@@ -75,9 +71,6 @@ def leapfrog_step(pos, vel, masses, dt):
 
 @njit(parallel=True)
 def neighbour_pairs(pos, cell_size):
-    """
-    Spatial‐hashing to find candidate collision pairs.
-    """
     n = pos.shape[0]
     gx = np.empty(n, np.int64)
     gy = np.empty(n, np.int64)
@@ -85,14 +78,12 @@ def neighbour_pairs(pos, cell_size):
         gx[i] = int(pos[i,0] // cell_size)
         gy[i] = int(pos[i,1] // cell_size)
 
-    # count
     cnt = 0
     for i in prange(n):
         for j in range(i+1, n):
             if abs(gx[i] - gx[j]) <= 1 and abs(gy[i] - gy[j]) <= 1:
                 cnt += 1
 
-    # collect
     pairs = np.empty((cnt, 2), np.int64)
     idx = 0
     for i in range(n):
@@ -107,9 +98,6 @@ def neighbour_pairs(pos, cell_size):
 
 @njit(parallel=True)
 def min_time_to_collision(pos, vel, radii, pairs, R_factor):
-    """
-    Compute the time until collision for each candidate pair.
-    """
     m = pairs.shape[0]
     times = np.empty(m, dtype=np.float64)
     for k in prange(m):
@@ -135,49 +123,42 @@ def min_time_to_collision(pos, vel, radii, pairs, R_factor):
                 t1 = (-b - sd) / (2*a)
                 t2 = (-b + sd) / (2*a)
                 tcol = np.inf
-                if t1 >= 0.0: tcol = t1
-                if 0.0 <= t2 < tcol: tcol = t2
+                if t1 >= 0.0:
+                    tcol = t1
+                if 0.0 <= t2 < tcol:
+                    tcol = t2
                 times[k] = tcol
-
     return times
 
 
 @njit
 def resolve_collisions(pos, vel, masses, radii,
                        pairs, tcols, dt, R_factor):
-    """
-    Merge ANY colliding bodies (planet–planet or star–planet) within dt.
-    The star has index 0 and remains the 'root' of any group it joins.
-    """
     n = masses.shape[0]
     parent = np.arange(n, dtype=np.int64)
 
-    # Union-Find helpers
     def find(x):
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
-    # Merge every pair with tcols <= dt
+    # Union pairs that collide within dt
     for k in range(pairs.shape[0]):
         i, j = pairs[k]
         if tcols[k] <= dt:
-            pi = find(i)
-            pj = find(j)
+            pi, pj = find(i), find(j)
             if pi != pj:
-                # ensure the star (0) stays root if involved
                 if pi == 0 or pj == 0:
                     parent[max(pi, pj)] = 0
                 else:
                     parent[pj] = pi
 
-    # Flatten and label each group
+    # Flatten groups
     labels = np.empty(n, np.int64)
     for i in range(n):
         labels[i] = find(i)
 
-    # Map old roots to new indices
     idx_map = -np.ones(n, np.int64)
     new_n = 0
     for i in range(n):
@@ -186,13 +167,11 @@ def resolve_collisions(pos, vel, masses, radii,
             idx_map[root] = new_n
             new_n += 1
 
-    # Allocate new arrays
     new_pos  = np.zeros((new_n, 2), dtype=np.float64)
     new_vel  = np.zeros((new_n, 2), dtype=np.float64)
     new_mass = np.zeros(new_n, dtype=np.float64)
     new_rad  = np.zeros(new_n, dtype=np.float64)
 
-    # Accumulate mass-weighted sums
     for i in range(n):
         g = idx_map[labels[i]]
         m = masses[i]
@@ -200,7 +179,6 @@ def resolve_collisions(pos, vel, masses, radii,
         new_pos[g]  += pos[i] * m
         new_vel[g]  += vel[i] * m
 
-    # Finalize centers of mass and assign radii
     star_group = idx_map[find(0)]
     for g in range(new_n):
         mt = new_mass[g]
@@ -215,9 +193,6 @@ def resolve_collisions(pos, vel, masses, radii,
 
 
 def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
-    """
-    Create one star at the origin + n micro-planets in a ring.
-    """
     mass_mean = total_mass_ratio * M_EARTH / n
     r0     = AU + np.random.uniform(-RHO_AU*AU, RHO_AU*AU, n)
     theta  = np.random.uniform(0, 2*np.pi, n)
@@ -228,7 +203,6 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
     masses_p = mass_mean * (1 + np.random.uniform(-RHO_MASS, RHO_MASS, n))
     radii_p  = (masses_p / M_EARTH)**(1/3) * R_EARTH
 
-    # Prepend the star at index 0
     pos    = np.vstack((np.zeros((1,2)), pos_p))
     vel    = np.vstack((np.zeros((1,2)), vel_p))
     masses = np.concatenate((np.array([M_STAR]), masses_p))
@@ -239,9 +213,6 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
 
 @njit(parallel=True)
 def compute_total_energy(pos, vel, masses):
-    """
-    Compute total mechanical energy (kinetic + potential).
-    """
     n = pos.shape[0]
     KE = 0.0
     for i in range(n):
@@ -259,32 +230,31 @@ def compute_total_energy(pos, vel, masses):
     return KE + PE
 
 
-def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO, t_end_years=T_END_YEARS):
+def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
+             t_end_years=T_END_YEARS, seed=SEED):
     """
     Generator yielding (t, positions, masses, velocities, energy).
+    Optionally seeds numpy RNG for reproducible runs.
     """
+    if seed is not None:
+        np.random.seed(seed)
+
     pos, vel, masses, radii = initialize_bodies(n, total_mass_ratio)
     t = 0.0
     t_end = t_end_years * 365 * 86400.0
     dt = DT_MIN
 
     while t < t_end and masses.size > 1:
-        # adaptive cell size for neighbour search
         max_v = np.max(np.linalg.norm(vel, axis=1))
         cell = 2 * np.max(radii) * R_FACTOR + max_v * dt
 
         pairs = neighbour_pairs(pos, cell)
-        if pairs.size:
-            tcols = min_time_to_collision(pos, vel, radii, pairs, R_FACTOR)
-        else:
-            tcols = np.empty(0, dtype=np.float64)
+        tcols = min_time_to_collision(pos, vel, radii, pairs, R_FACTOR) if pairs.size else np.empty(0)
 
-        # estimate next dt
         future = tcols[tcols > dt]
         dt_next = (np.clip((future.min() - dt)*2, DT_MIN, DT_MAX)
                    if future.size else DT_MAX)
 
-        # advance and resolve all collisions at once
         pos, vel = leapfrog_step(pos, vel, masses, dt)
         pos, vel, masses, radii = resolve_collisions(
             pos, vel, masses, radii, pairs, tcols, dt, R_FACTOR
@@ -297,127 +267,169 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO, t_end_years=T_END_YEARS)
         dt = dt_next
 
 
-def animate(sim_gen, draw_interval=DRAW_SKIP):
+def animate(sim_gen, draw_interval=DRAW_SKIP,
+            save_years=SAVE_YEARS, gif_filename=GIF_FILENAME):
     """
-    Create a 2×2 panel animation: scatter, histogram, count & energy.
+    If save_years is non-empty, captures snapshots at those years and
+    writes a GIF. Otherwise, shows the standard interactive animation.
     """
-    # wrap sim_gen to decimate frames
-    def decimated_gen():
-        for i, frame in enumerate(sim_gen):
-            if i % draw_interval[1] < draw_interval[2]:
-                yield frame
-            elif i % draw_interval[0] == 0:
-                yield frame
+    # Helper: set up figure, axes, initial artists, and update() function.
+    def setup_animation(first_frame):
+        t0, pos0, m0, vel0, E0 = first_frame
+        star_x0, star_y0 = pos0[0]
+        pos_p0, m_p0 = pos0[1:], m0[1:]
 
-    gen = decimated_gen()
+        plt.style.use(PLT_STYLE)
+        fig = plt.figure(figsize=(12, 8))
+        gs = fig.add_gridspec(3, 2,
+                              width_ratios=[2,1],
+                              height_ratios=[3,3,3],
+                              wspace=0.3, hspace=0.7)
 
-    # First frame
-    t0, pos0, m0, vel0, E0 = next(gen)
-    star_x0, star_y0 = pos0[0]
-    pos_p0 = pos0[1:]
-    m_p0   = m0[1:]
+        # Scatter panel
+        ax_sc = fig.add_subplot(gs[:,0])
+        star_marker = ax_sc.scatter([star_x0], [star_y0],
+                                    s=300, marker=(12,1,0), c='red')
+        ax_sc.set_xlim(-2.5*AU, 2.5*AU)
+        ax_sc.set_ylim(-2.5*AU, 2.5*AU)
+        ax_sc.set_aspect('equal')
+        ax_sc.xaxis.set_major_locator(plt.MultipleLocator(AU))
+        ax_sc.yaxis.set_major_locator(plt.MultipleLocator(AU))
+        ax_sc.xaxis.set_major_formatter(FuncFormatter(lambda x,_: f'{x/AU:.0f} AU'))
+        ax_sc.yaxis.set_major_formatter(FuncFormatter(lambda y,_: f'{y/AU:.0f} AU'))
 
-    plt.style.use(PLT_STYLE)
-    fig = plt.figure(figsize=(12, 8))
-    gs = fig.add_gridspec(3, 2, width_ratios=[2,1], height_ratios=[3,3,3],
-                          wspace=0.3, hspace=0.7)
+        mean_mass = TOT_MASS_RATIO * M_EARTH / N_INIT
+        norm = LogNorm(vmin=mean_mass*0.1, vmax=mean_mass*N_INIT)
+        r0 = (m_p0 / M_EARTH)**(1/3) * R_EARTH
+        s0 = (r0 * PLOT_SCALE)**2
+        scat = ax_sc.scatter(pos_p0[:,0], pos_p0[:,1],
+                             c=m_p0, cmap=COLOR, norm=norm, s=s0)
 
-    # Scatter plot around star
-    ax_sc = fig.add_subplot(gs[:,0])
-    star_marker = ax_sc.scatter([star_x0], [star_y0], s=300, marker=(12,1,0), c='orange')
-    ax_sc.set_xlim(-2.5*AU, 2.5*AU)
-    ax_sc.set_ylim(-2.5*AU, 2.5*AU)
-    ax_sc.set_aspect('equal')
-    ax_sc.xaxis.set_major_locator(plt.MultipleLocator(AU))
-    ax_sc.yaxis.set_major_locator(plt.MultipleLocator(AU))
-    ax_sc.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x/AU:.0f} AU'))
-    ax_sc.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y/AU:.0f} AU'))
+        # Histogram panel
+        ax_h = fig.add_subplot(gs[0,1])
+        min_em = (1-RHO_MASS) * TOT_MASS_RATIO / N_INIT
+        max_em = (1+RHO_MASS) * TOT_MASS_RATIO
+        bins = np.logspace(np.log10(min_em), np.log10(max_em), 30)
+        cnt0, _ = np.histogram(m_p0 / M_EARTH, bins=bins)
+        cnt0 = np.where(cnt0>0, cnt0, 1)
+        bars = ax_h.bar(bins[:-1], cnt0,
+                        width=np.diff(bins), align='edge', edgecolor='black')
+        ax_h.set_xscale('log')
+        ax_h.set_yscale('log')
+        ax_h.set_xlabel('M (Earth masses)')
+        ax_h.set_ylabel('Count')
+        ax_h.set_title('Mass Distribution')
+        ax_h.set_ylim(1e-1, cnt0.max()*1.2)
 
-    mean_mass = TOT_MASS_RATIO * M_EARTH / N_INIT
-    norm = LogNorm(vmin=mean_mass*0.1,
-                   vmax=mean_mass*N_INIT)
-    r0 = (m_p0 / M_EARTH)**(1/3) * R_EARTH
-    s0 = (r0 * PLOT_SCALE)**2
-    scat = ax_sc.scatter(pos_p0[:,0], pos_p0[:,1],
-                         c=m_p0, cmap=COLOR, norm=norm, s=s0)
+        # Count vs time
+        ax_n = fig.add_subplot(gs[1,1])
+        times = [t0 / (86400*365)]
+        counts = [m_p0.size]
+        line_count, = ax_n.plot(times, counts, 'b-')
+        ax_n.set_xlabel('t (years)')
+        ax_n.set_ylabel('N (bodies)')
+        ax_n.set_title('Number of Planetesimals')
 
-    # Histogram of masses
-    ax_h = fig.add_subplot(gs[0,1])
-    min_em = (1-RHO_MASS) * TOT_MASS_RATIO / N_INIT
-    max_em = (1+RHO_MASS) * TOT_MASS_RATIO
-    bins = np.logspace(np.log10(min_em), np.log10(max_em), 30)
-    cnt0, _ = np.histogram(m_p0 / M_EARTH, bins=bins)
-    cnt0 = np.where(cnt0>0, cnt0, 1)
-    bars = ax_h.bar(bins[:-1], cnt0,
-                    width=np.diff(bins), align='edge', edgecolor='black')
-    ax_h.set_xscale('log')
-    ax_h.set_yscale('log')
-    ax_h.set_xlabel('M (Earth masses)')
-    ax_h.set_ylabel('Count')
-    ax_h.set_title('Mass Distribution')
-    ax_h.set_ylim(1e-1, cnt0.max()*1.2)
+        # Energy vs time
+        ax_e = fig.add_subplot(gs[2,1])
+        energies = [E0]
+        line_energy, = ax_e.plot(times, energies, 'm-')
+        ax_e.set_xlabel('t (years)')
+        ax_e.set_ylabel('Energy (J)')
+        ax_e.set_title('Total Mechanical Energy')
 
-    # Planet count vs time
-    ax_n = fig.add_subplot(gs[1,1])
-    times = [t0 / (86400*365)]
-    counts = [m_p0.size]
-    line_count, = ax_n.plot(times, counts, 'b-')
-    ax_n.set_xlabel('t (years)')
-    ax_n.set_ylabel('N (bodies)')
-    ax_n.set_title('Number of Planetesimals')
+        def update(frame):
+            t, pos, m, vel, E = frame
+            star_marker.set_offsets(pos[0])
+            pos_p, m_p = pos[1:], m[1:]
 
-    # Energy vs time
-    ax_e = fig.add_subplot(gs[2,1])
-    energies = [E0]
-    line_energy, = ax_e.plot(times, energies, 'm-')
-    ax_e.set_xlabel('t (years)')
-    ax_e.set_ylabel('Energy (J)')
-    ax_e.set_title('Total Mechanical Energy')
+            # scatter
+            r = (m_p / M_EARTH)**(1/3) * R_EARTH
+            s = (r * PLOT_SCALE)**2
+            scat.set_offsets(pos_p)
+            scat.set_array(m_p)
+            scat.set_sizes(s)
+            ax_sc.set_title(f't = {t/(86400*365):.2f} yr   N = {m_p.size}')
 
-    def update(frame):
-        t, pos, m, vel, E = frame
-        star_marker.set_offsets(pos[0])
-        pos_p = pos[1:]
-        m_p   = m[1:]
+            # histogram
+            cnt, _ = np.histogram(m_p / M_EARTH, bins=bins)
+            cnt = np.where(cnt>0, cnt, 1e-8)
+            for rect, h in zip(bars, cnt):
+                rect.set_height(h)
+            ax_h.set_ylim(1e-1, cnt.max()*1.2)
 
-        # update scatter
-        r = (m_p / M_EARTH)**(1/3) * R_EARTH
-        s = (r * PLOT_SCALE)**2
-        scat.set_offsets(pos_p)
-        scat.set_array(m_p)
-        scat.set_sizes(s)
-        ax_sc.set_title(f't = {t/(86400*365):.2f} years   N = {m_p.size}')
+            # count curve
+            times.append(t/(86400*365))
+            counts.append(m_p.size)
+            line_count.set_data(times, counts)
+            ax_n.set_xlim(0, times[-1]*1.05)
+            ax_n.set_ylim(0, max(counts)*1.05)
 
-        # update histogram
-        cnt, _ = np.histogram(m_p / M_EARTH, bins=bins)
-        cnt = np.where(cnt>0, cnt, 1e-8)
-        for rect, h in zip(bars, cnt):
-            rect.set_height(h)
-        ax_h.set_ylim(1e-1, cnt.max()*1.2)
+            # energy curve
+            energies.append(E)
+            line_energy.set_data(times, energies)
+            ax_e.set_xlim(0, times[-1]*1.05)
+            ax_e.set_ylim(min(energies), max(energies))
 
-        # update counts
-        times.append(t/(86400*365))
-        counts.append(m_p.size)
-        line_count.set_data(times, counts)
-        ax_n.set_xlim(0, times[-1]*1.05)
-        ax_n.set_ylim(0, max(counts)*1.05)
+            return (star_marker, scat, *bars, line_count, line_energy)
 
-        # update energy curve
-        energies.append(E)
-        line_energy.set_data(times, energies)
-        ax_e.set_xlim(0, times[-1]*1.05)
-        ax_e.set_ylim(min(energies), max(energies))
+        return fig, update
 
-        return (star_marker, scat, *bars, line_count, line_energy)
+    # Branch: snapshots-to-GIF vs interactive
+    if save_years:
+        # Run sim and collect frames at target years
+        year_sec = 365 * 86400.0
+        targets = sorted(save_years)
+        targets_sec = [y * year_sec for y in targets]
+        collected = []
+        for t, pos, m, vel, E in sim_gen:
+            while targets_sec and t >= targets_sec[0]:
+                collected.append((t, pos.copy(), m.copy(), vel.copy(), E))
+                targets_sec.pop(0)
+            if not targets_sec:
+                break
 
-    return FuncAnimation(fig, update,
-                         frames=gen,
-                         interval=50, blit=False,
-                         cache_frame_data=False,
-                         repeat=False)
+        if not collected:
+            print("No snapshots reached; GIF not created.")
+            return
+
+        # Set up figure & update using first snapshot
+        fig, update = setup_animation(collected[0])
+        anim = FuncAnimation(fig, update,
+                             frames=collected,
+                             interval=200, blit=False,
+                             repeat=False)
+
+        # Save as GIF (uses matplotlib's PillowWriter backend)
+        anim.save(gif_filename, writer='pillow', fps=1)
+        print(f"Saved evolution GIF to '{gif_filename}'")
+        return anim
+
+    else:
+        # Standard interactive animation
+        # wrap sim_gen to decimate frames
+        def decimated_gen():
+            for i, frame in enumerate(sim_gen):
+                if i % draw_interval[1] < draw_interval[2]:
+                    yield frame
+                elif i % draw_interval[0] == 0:
+                    yield frame
+
+        gen = decimated_gen()
+        first = next(gen)
+        fig, update = setup_animation(first)
+        return FuncAnimation(fig, update,
+                             frames=gen,
+                             interval=50, blit=False,
+                             cache_frame_data=False,
+                             repeat=False)
 
 
 if __name__ == '__main__':
-    sim = simulate()
-    anim = animate(sim)
-    plt.show()
+    sim = simulate(seed=SEED)
+    anim = animate(sim, draw_interval=DRAW_SKIP,
+                   save_years=SAVE_YEARS,
+                   gif_filename=GIF_FILENAME)
+    # In interactive mode, SHOW the plot; in GIF mode, it's already saved
+    if not SAVE_YEARS:
+        plt.show()
