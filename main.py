@@ -24,9 +24,9 @@ PLOT_SCALE     = 2e-6              # planet scatter size
 PLT_STYLE      = "Solarize_Light2" # style for matplotlib
 
 SEED           = None              # random seed for reproducibility (None to disable)
-SAVE_YEARS     = [1, 5, 10, 50, 100, 500, 1000, 5000, 10000]
+SAVE_YEARS     = list(np.arange(1000)/10) + list(range(100,10001,100))
                                    # years at which to capture snapshots for GIF;
-                                   # set to [] to disable GIF output
+                                   # set to [] to disable GIF output and enable animate
 GIF_FILENAME   = 'selected_frames.gif'
 # ----------------------------------------------------
 
@@ -246,7 +246,7 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
 
     while t < t_end and masses.size > 1:
         max_v = np.max(np.linalg.norm(vel, axis=1))
-        cell = 2 * np.max(radii) * R_FACTOR + max_v * dt
+        cell = 2 * np.max(radii) * R_FACTOR + 2 * max_v * dt
 
         pairs = neighbour_pairs(pos, cell)
         tcols = min_time_to_collision(pos, vel, radii, pairs, R_FACTOR) if pairs.size else np.empty(0)
@@ -390,7 +390,7 @@ def animate(sim_gen, draw_interval=DRAW_SKIP,
                 break
 
         if not collected:
-            print("No snapshots reached; GIF not created.")
+            print("gif output failed!")
             return
 
         # Set up figure & update using first snapshot
@@ -401,7 +401,7 @@ def animate(sim_gen, draw_interval=DRAW_SKIP,
                              repeat=False)
 
         # Save as GIF (uses matplotlib's PillowWriter backend)
-        anim.save(gif_filename, writer='pillow', fps=1)
+        anim.save(gif_filename, writer='pillow', fps=10)
         print(f"Saved evolution GIF to '{gif_filename}'")
         return anim
 
@@ -420,7 +420,7 @@ def animate(sim_gen, draw_interval=DRAW_SKIP,
         fig, update = setup_animation(first)
         return FuncAnimation(fig, update,
                              frames=gen,
-                             interval=50, blit=False,
+                             interval=50, blit=True,
                              cache_frame_data=False,
                              repeat=False)
 
