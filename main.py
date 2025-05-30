@@ -25,10 +25,13 @@ PLOT_SCALE      = 2e-6                # planet scatter marker size scale
 PLT_STYLE       = "Solarize_Light2"   # matplotlib style
 
 SEED            = 2025                # random seed (None to disable)
-SAVE_YEARS      = list(np.arange(50)/50) \
-                  + list(range(1,100)) \
+SAVE_YEARS_1    = list(np.arange(50)/50) \
+                  + list(range(1,100,2)) \
                   + list(range(100,10000,100)) \
-                  + list(np.arange(499950,500002)/51)
+                  + list(np.arange(499900,500002)/50)
+SAVE_YEARS_2    = list(range(10000,100000,1000)) \
+                  + list(np.arange(50e5,50e5+102)/50)
+SAVE_YEARS      = SAVE_YEARS_1
 GIF_FILENAME    = 'selected_frames.gif'
 GIF_FPS         = 10
 
