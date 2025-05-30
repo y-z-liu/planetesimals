@@ -8,11 +8,11 @@ from matplotlib.ticker import FuncFormatter
 
 # ---------------- Tunable parameters ----------------
 N_INIT          = 1000                # initial number of micro-planets
-T_END_YEARS     = 10000               # total integration time [years]
-DRAW_SKIP       = [1e3, 1e6, 1e3]     # draw intervals for interactive animation
+T_END_YEARS     = 1000                # total integration time [years]
+DRAW_SKIP       = [1e3, 1e4, 1e3]     # draw intervals for interactive animation
 
-R_FACTOR        = 2                   # collision-radius scaling factor
-TOT_MASS_RATIO  = 5                   # total planetary mass (Earth masses)
+R_FACTOR        = 10                  # collision-radius scaling factor
+TOT_MASS_RATIO  = 10                  # total planetary mass (Earth masses)
 
 RHO_AU          = 0.02                # orbital scatter fraction
 RHO_MASS        = 0.2                 # mass scatter fraction
@@ -27,12 +27,14 @@ PLT_STYLE       = "Solarize_Light2"   # matplotlib style
 SEED            = 2025                # random seed (None to disable)
 SAVE_YEARS      = list(np.arange(100)/50) \
                   + list(range(2,100,2)) \
-                  + list(range(100,10000,200)) \
-                  + list(np.arange(499900,500002)/50)
+                  + list(range(100,1000,20)) \
+                  + list(np.arange(4900,5001)/50)
+                  #+ list(range(100,10000,200)) \
+                  #+ list(np.arange(499900,500002)/50)
 GIF_FILENAME    = 'selected_frames.gif'
 GIF_FPS         = 10
 
-SAVE_GIF        = False
+SAVE_GIF        = True
 
 # State load/save parameters
 LOAD_STATE      = False
@@ -41,8 +43,8 @@ STATE_FILENAME  = 'saved_state.npz'
 
 # 3D simulation flag and z-scatter
 THREE_D         = True
-RHO_Z           = 0.0001
-COLOR_FACTOR    = 0.01               # how much AU to z=0 to be colored red/green.
+RHO_Z           = 1e-4
+COLOR_FACTOR    = 0.05                # how much AU to z=0 to be colored red/green.
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -208,6 +210,25 @@ def resolve_collisions(pos, vel, masses, radii,
 
     return new_pos, new_vel, new_mass, new_rad
 
+@njit(parallel=True)
+def compute_total_energy(pos, vel, masses):
+    """Compute total mechanical energy in 3D."""
+    n = pos.shape[0]
+    KE = 0.0
+    for i in range(n):
+        KE += 0.5 * masses[i] * np.dot(vel[i], vel[i])
+    PE = 0.0
+    for i in prange(n):
+        mi = masses[i]
+        xi, yi, zi = pos[i]
+        for j in range(i+1, n):
+            dx = xi - pos[j,0]
+            dy = yi - pos[j,1]
+            dz = zi - pos[j,2]
+            dist = np.sqrt(dx*dx + dy*dy + dz*dz)
+            PE += -G * mi * masses[j] / dist
+    return KE + PE
+
 def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
     """Randomly place n bodies around the star, optionally in 3D."""
     mass_mean = total_mass_ratio * M_EARTH / n
@@ -243,25 +264,6 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
 
     return pos, vel, masses, radii
 
-@njit(parallel=True)
-def compute_total_energy(pos, vel, masses):
-    """Compute total mechanical energy in 3D."""
-    n = pos.shape[0]
-    KE = 0.0
-    for i in range(n):
-        KE += 0.5 * masses[i] * np.dot(vel[i], vel[i])
-    PE = 0.0
-    for i in prange(n):
-        mi = masses[i]
-        xi, yi, zi = pos[i]
-        for j in range(i+1, n):
-            dx = xi - pos[j,0]
-            dy = yi - pos[j,1]
-            dz = zi - pos[j,2]
-            dist = np.sqrt(dx*dx + dy*dy + dz*dz)
-            PE += -G * mi * masses[j] / dist
-    return KE + PE
-
 def simulate(n=N_INIT,
              total_mass_ratio=TOT_MASS_RATIO,
              t_end_years=T_END_YEARS,
@@ -270,7 +272,8 @@ def simulate(n=N_INIT,
              save_state=SAVE_STATE,
              state_filename=STATE_FILENAME):
     """
-    Yields (t, pos, masses, vel, energy) frames, with optional load/save.
+    Yields (t, pos, masses, vel) frames, with optional load/save.
+    Energy is not computed here to avoid O(N^2) cost at every step.
     """
     if seed is not None:
         np.random.seed(seed)
@@ -310,8 +313,7 @@ def simulate(n=N_INIT,
         )
 
         t += dt
-        E = compute_total_energy(pos, vel, masses)
-        yield t, pos.copy(), masses.copy(), vel.copy(), E
+        yield t, pos.copy(), masses.copy(), vel.copy()
         dt = dt_next
 
     if save_state:
@@ -329,14 +331,17 @@ def animate(sim_gen,
     """
     If save_gif is True, captures snapshots into a GIF (at years in save_years);
     otherwise launches an interactive (3D-aware) real-time animation.
+    Computes energy only when drawing.
     """
     def setup_animation(first_frame):
-        # Unpack first frame
-        t0, pos0, m0, _, E0 = first_frame
+        # Unpack first frame (no energy)
+        t0, pos0, m0, vel0 = first_frame
+        # Compute initial energy
+        E0 = compute_total_energy(pos0, vel0, m0)
+
         star_x, star_y, _ = pos0[0]
         pos_p0 = pos0[1:]; m_p0 = m0[1:]
 
-        # Styling and figure layout
         plt.style.use(PLT_STYLE)
         fig = plt.figure(figsize=(12, 8))
         gs = fig.add_gridspec(3, 2,
@@ -365,7 +370,7 @@ def animate(sim_gen,
                 'zmap', [
                     (0.0, (0.0, 1.0, 0.0, alpha)),
                     (0.5, (0.0, 0.0, 1.0, alpha)),
-                    (1.0, (1.0, 0.0, 0.0, alpha)), 
+                    (1.0, (1.0, 0.0, 0.0, alpha)),
                 ]
             )
             scat = ax_sc.scatter(
@@ -419,15 +424,18 @@ def animate(sim_gen,
         ax_e.set_title('Total Mechanical Energy')
 
         def update(frame):
-            t, pos, m, _, E = frame
+            t, pos, m, vel = frame
+            # compute energy only when plotting
+            E = compute_total_energy(pos, vel, m)
+
             star_marker.set_offsets(pos[0,:2])
             pos_p = pos[1:]; m_p = m[1:]
             sizes = ((m_p/M_EARTH)**(1/3)*R_EARTH * PLOT_SCALE)**2
 
             if three_d:
-                zs = pos_p[:,2]
+                zvals = pos_p[:,2]
                 scat.set_offsets(pos_p[:,:2])
-                scat.set_array(zs)
+                scat.set_array(zvals)
                 scat.set_sizes(sizes)
             else:
                 scat.set_offsets(pos_p[:,:2])
@@ -465,10 +473,10 @@ def animate(sim_gen,
         ts = [y * year_sec for y in targets]
         collected = []
         for frame in sim_gen:
-            t, _, m, _, _ = frame
+            t, _, m, _ = frame
             while ts and t >= ts[0]:
                 collected.append(frame)
-                print("collected t=", t/year_sec, "yrs, N=", len(m)-1)
+                print(f"collected t= {(t/year_sec):.2f}yrs, N= {len(m)-1}")
                 ts.pop(0)
             if not ts:
                 break
