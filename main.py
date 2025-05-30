@@ -10,8 +10,8 @@ N_INIT         = 1000              # initial number of micro-planets
 T_END_YEARS    = 10000             # total integration time [years]
 DRAW_SKIP      = [1e3, 3e5, 3e2]   # {normal interval, except every _, slow down _}
 
-R_FACTOR       = 5                 # collision-radius scaling factor
-TOT_MASS_RATIO = 10                # total planetary mass, in Earth masses
+R_FACTOR       = 2                 # collision-radius scaling factor
+TOT_MASS_RATIO = 5                 # total planetary mass, in Earth masses
 
 RHO_AU         = 0.02              # orbital scatter fraction
 RHO_MASS       = 0.2               # mass scatter fraction
@@ -23,8 +23,8 @@ COLOR          = "Blues"           # colormap for planet scatter
 PLOT_SCALE     = 2e-6              # planet scatter size
 PLT_STYLE      = "Solarize_Light2" # style for matplotlib
 
-SEED           = None              # random seed for reproducibility (None to disable)
-SAVE_YEARS     = list(np.arange(1000)/10) + list(range(100,10001,100))
+SEED           = 2025              # random seed for reproducibility (None to disable)
+SAVE_YEARS     = list(np.arange(100)/100) + list(range(1,100)) + list(range(100,10000,100)) + list(np.arange(999900,1000001)/100)
                                    # years at which to capture snapshots for GIF;
                                    # set to [] to disable GIF output and enable animate
 GIF_FILENAME   = 'selected_frames.gif'
@@ -382,9 +382,11 @@ def animate(sim_gen, draw_interval=DRAW_SKIP,
         targets = sorted(save_years)
         targets_sec = [y * year_sec for y in targets]
         collected = []
+        print("creating gif... seed= ", SEED, ",R= ", R_FACTOR, ",M= ", TOT_MASS_RATIO)
         for t, pos, m, vel, E in sim_gen:
             while targets_sec and t >= targets_sec[0]:
                 collected.append((t, pos.copy(), m.copy(), vel.copy(), E))
+                print("collected t= ", t/year_sec, "yrs, N=", len(m)-1)
                 targets_sec.pop(0)
             if not targets_sec:
                 break
@@ -401,7 +403,8 @@ def animate(sim_gen, draw_interval=DRAW_SKIP,
                              repeat=False)
 
         # Save as GIF (uses matplotlib's PillowWriter backend)
-        anim.save(gif_filename, writer='pillow', fps=10)
+        anim.save(gif_filename, writer='pillow', fps=20)
+        print("finishing... seed= ", SEED, ",R= ", R_FACTOR, ",M= ", TOT_MASS_RATIO)
         print(f"Saved evolution GIF to '{gif_filename}'")
         return anim
 
