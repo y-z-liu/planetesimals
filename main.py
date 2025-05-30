@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from numba import njit, prange
 import matplotlib.pyplot as plt
@@ -6,28 +7,35 @@ from matplotlib.animation import FuncAnimation
 from matplotlib.ticker import FuncFormatter
 
 # ---------------- Tunable parameters ----------------
-N_INIT         = 1000              # initial number of micro-planets
-T_END_YEARS    = 10000             # total integration time [years]
-DRAW_SKIP      = [1e3, 3e5, 3e2]   # {normal interval, except every _, slow down _}
+N_INIT          = 1000                # initial number of micro-planets
+T_END_YEARS     = 10000               # total integration time [years]
+DRAW_SKIP       = [1e3, 3e5, 3e2]     # draw intervals for interactive animation
 
-R_FACTOR       = 2                 # collision-radius scaling factor
-TOT_MASS_RATIO = 5                 # total planetary mass, in Earth masses
+R_FACTOR        = 2                   # collision-radius scaling factor
+TOT_MASS_RATIO  = 2                   # total planetary mass (Earth masses)
 
-RHO_AU         = 0.02              # orbital scatter fraction
-RHO_MASS       = 0.2               # mass scatter fraction
+RHO_AU          = 0.02                # orbital scatter fraction
+RHO_MASS        = 0.2                 # mass scatter fraction
 
-DT_MIN         = 1.0e2             # minimum timestep [s]
-DT_MAX         = 1.0e5             # maximum timestep [s]
+DT_MIN          = 1.0e2               # minimum timestep [s]
+DT_MAX          = 1.0e5               # maximum timestep [s]
 
-COLOR          = "Blues"           # colormap for planet scatter
-PLOT_SCALE     = 2e-6              # planet scatter size
-PLT_STYLE      = "Solarize_Light2" # style for matplotlib
+COLOR           = "Blues"             # colormap for planet scatter
+PLOT_SCALE      = 2e-6                # planet scatter marker size scale
+PLT_STYLE       = "Solarize_Light2"   # matplotlib style
 
-SEED           = 2025              # random seed for reproducibility (None to disable)
-SAVE_YEARS     = list(np.arange(100)/100) + list(range(1,100)) + list(range(100,10000,100)) + list(np.arange(999900,1000001)/100)
-                                   # years at which to capture snapshots for GIF;
-                                   # set to [] to disable GIF output and enable animate
-GIF_FILENAME   = 'selected_frames.gif'
+SEED            = 2025                # random seed (None to disable)
+SAVE_YEARS      = list(np.arange(50)/50) \
+                  + list(range(1,100)) \
+                  + list(range(100,10000,100)) \
+                  + list(np.arange(499950,500002)/51)
+GIF_FILENAME    = 'selected_frames.gif'
+GIF_FPS         = 10
+
+# New state-control parameters
+LOAD_STATE      = False               # whether to load a saved state at start
+SAVE_STATE      = True                # whether to save final state at end
+STATE_FILENAME  = 'saved_state.npz'
 # ----------------------------------------------------
 
 # ---------------- Physical constants ----------------
@@ -38,7 +46,6 @@ AU       = 1.496e11          # astronomical unit [m]
 R_STAR   = 6.957e8           # stellar radius [m]
 R_EARTH  = 6.371e6           # Earth radius [m]
 # ----------------------------------------------------
-
 
 @njit(parallel=True)
 def compute_accelerations(pos, masses):
@@ -58,7 +65,6 @@ def compute_accelerations(pos, masses):
         acc[i,0], acc[i,1] = axi, ayi
     return acc
 
-
 @njit
 def leapfrog_step(pos, vel, masses, dt):
     a0 = compute_accelerations(pos, masses)
@@ -67,7 +73,6 @@ def leapfrog_step(pos, vel, masses, dt):
     a1 = compute_accelerations(pos_new, masses)
     vel_new = vel_half + 0.5 * dt * a1
     return pos_new, vel_new
-
 
 @njit(parallel=True)
 def neighbour_pairs(pos, cell_size):
@@ -94,7 +99,6 @@ def neighbour_pairs(pos, cell_size):
                 idx += 1
 
     return pairs
-
 
 @njit(parallel=True)
 def min_time_to_collision(pos, vel, radii, pairs, R_factor):
@@ -129,7 +133,6 @@ def min_time_to_collision(pos, vel, radii, pairs, R_factor):
                     tcol = t2
                 times[k] = tcol
     return times
-
 
 @njit
 def resolve_collisions(pos, vel, masses, radii,
@@ -191,8 +194,8 @@ def resolve_collisions(pos, vel, masses, radii,
 
     return new_pos, new_vel, new_mass, new_rad
 
-
 def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
+    """Randomly place n bodies around the star with small scatter."""
     mass_mean = total_mass_ratio * M_EARTH / n
     r0     = AU + np.random.uniform(-RHO_AU*AU, RHO_AU*AU, n)
     theta  = np.random.uniform(0, 2*np.pi, n)
@@ -210,9 +213,9 @@ def initialize_bodies(n, total_mass_ratio, speed_variation=0.0):
 
     return pos, vel, masses, radii
 
-
 @njit(parallel=True)
 def compute_total_energy(pos, vel, masses):
+    """Compute total mechanical energy (kinetic + potential)."""
     n = pos.shape[0]
     KE = 0.0
     for i in range(n):
@@ -229,27 +232,47 @@ def compute_total_energy(pos, vel, masses):
 
     return KE + PE
 
-
-def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
-             t_end_years=T_END_YEARS, seed=SEED):
+def simulate(n=N_INIT,
+             total_mass_ratio=TOT_MASS_RATIO,
+             t_end_years=T_END_YEARS,
+             seed=SEED,
+             load_state=LOAD_STATE,
+             save_state=SAVE_STATE,
+             state_filename=STATE_FILENAME):
     """
     Generator yielding (t, positions, masses, velocities, energy).
-    Optionally seeds numpy RNG for reproducible runs.
+    Can load from a saved state at start and save final state at the end.
     """
+    # Seed RNG
     if seed is not None:
         np.random.seed(seed)
 
-    pos, vel, masses, radii = initialize_bodies(n, total_mass_ratio)
-    t = 0.0
+    # Load or initialize
+    if load_state and os.path.exists(state_filename):
+        data = np.load(state_filename)
+        t      = float(data['t'])
+        pos    = data['pos']
+        vel    = data['vel']
+        masses = data['masses']
+        radii  = data['radii']
+        print(f"Loaded state from '{state_filename}' at t = {t/(365*86400):.2f} yr")
+    else:
+        if load_state:
+            print(f"State file '{state_filename}' not found; starting fresh")
+        pos, vel, masses, radii = initialize_bodies(n, total_mass_ratio)
+        t = 0.0
+
     t_end = t_end_years * 365 * 86400.0
     dt = DT_MIN
 
+    # Main integrate-and-resolve loop
     while t < t_end and masses.size > 1:
         max_v = np.max(np.linalg.norm(vel, axis=1))
         cell = 2 * np.max(radii) * R_FACTOR + 2 * max_v * dt
 
         pairs = neighbour_pairs(pos, cell)
-        tcols = min_time_to_collision(pos, vel, radii, pairs, R_FACTOR) if pairs.size else np.empty(0)
+        tcols = (min_time_to_collision(pos, vel, radii, pairs, R_FACTOR)
+                 if pairs.size else np.empty(0))
 
         future = tcols[tcols > dt]
         dt_next = (np.clip((future.min() - dt)*2, DT_MIN, DT_MAX)
@@ -266,12 +289,20 @@ def simulate(n=N_INIT, total_mass_ratio=TOT_MASS_RATIO,
 
         dt = dt_next
 
+    # Once generator finishes, optionally save final state
+    if save_state:
+        np.savez(state_filename,
+                 t=t, pos=pos, vel=vel,
+                 masses=masses, radii=radii)
+        print(f"Saved final state to '{state_filename}' at t = {t/(365*86400):.2f} yr")
 
-def animate(sim_gen, draw_interval=DRAW_SKIP,
-            save_years=SAVE_YEARS, gif_filename=GIF_FILENAME):
+def animate(sim_gen,
+            draw_interval=DRAW_SKIP,
+            save_years=SAVE_YEARS,
+            gif_filename=GIF_FILENAME):
     """
-    If save_years is non-empty, captures snapshots at those years and
-    writes a GIF. Otherwise, shows the standard interactive animation.
+    If save_years is non-empty, captures snapshots at those years and writes a GIF.
+    Otherwise, shows an interactive animation.
     """
     # Helper: set up figure, axes, initial artists, and update() function.
     def setup_animation(first_frame):
@@ -403,7 +434,7 @@ def animate(sim_gen, draw_interval=DRAW_SKIP,
                              repeat=False)
 
         # Save as GIF (uses matplotlib's PillowWriter backend)
-        anim.save(gif_filename, writer='pillow', fps=20)
+        anim.save(gif_filename, writer='pillow', fps=GIF_FPS)
         print("finishing... seed= ", SEED, ",R= ", R_FACTOR, ",M= ", TOT_MASS_RATIO)
         print(f"Saved evolution GIF to '{gif_filename}'")
         return anim
@@ -426,13 +457,15 @@ def animate(sim_gen, draw_interval=DRAW_SKIP,
                              interval=50, blit=True,
                              cache_frame_data=False,
                              repeat=False)
-
-
+    
 if __name__ == '__main__':
-    sim = simulate(seed=SEED)
-    anim = animate(sim, draw_interval=DRAW_SKIP,
+    sim = simulate(seed=SEED,
+                   load_state=LOAD_STATE,
+                   save_state=SAVE_STATE,
+                   state_filename=STATE_FILENAME)
+    anim = animate(sim,
+                   draw_interval=DRAW_SKIP,
                    save_years=SAVE_YEARS,
                    gif_filename=GIF_FILENAME)
-    # In interactive mode, SHOW the plot; in GIF mode, it's already saved
     if not SAVE_YEARS:
         plt.show()
