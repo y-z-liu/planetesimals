@@ -8,7 +8,7 @@ from matplotlib.ticker import FuncFormatter
 
 # ---------------- Tunable parameters ----------------
 N_INIT          = 1000                # initial number of micro-planets
-T_END_YEARS     = 1000                # total integration time [years]
+T_END_YEARS     = 10000               # total integration time [years]
 DRAW_SKIP       = [1e3, 1e4, 1e3]     # draw intervals for interactive animation
 
 R_FACTOR        = 10                  # collision-radius scaling factor
@@ -25,12 +25,13 @@ PLOT_SCALE      = 2e-6                # planet scatter marker size scale
 PLT_STYLE       = "Solarize_Light2"   # matplotlib style
 
 SEED            = 2025                # random seed (None to disable)
-SAVE_YEARS      = list(np.arange(100)/50) \
+SAVE_YEARS_1    = list(np.arange(100)/50) \
                   + list(range(2,100,2)) \
-                  + list(range(100,1000,20)) \
-                  + list(np.arange(4900,5001)/50)
-                  #+ list(range(100,10000,200)) \
-                  #+ list(np.arange(499900,500002)/50)
+                  + list(range(100,10000,200)) \
+                  + list(np.arange(499900,500002)/50)
+SAVE_YEARS_2    = list(range(10000,100000,1000)) \
+                  + list(np.arange(4999900,5000002)/50)
+SAVE_YEARS      = SAVE_YEARS_1
 GIF_FILENAME    = 'selected_frames.gif'
 GIF_FPS         = 10
 
